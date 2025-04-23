@@ -346,7 +346,25 @@ require('lazy').setup({
   --
   -- Then, because we use the `opts` key (recommended), the configuration runs
   -- after the plugin has been loaded as `require(MODULE).setup(opts)`.
-
+  {
+    'numToStr/Comment.nvim',
+    config = function()
+      require('Comment').setup {
+        toggler = {
+          line = '<leader>/', -- Line comment keybinding
+          block = '<leader>*', -- Block comment keybinding
+        },
+        opleader = {
+          line = '<leader>/', -- Operator-pending line comment
+          block = '<leader>*', -- Operator-pending block comment
+        },
+        mappings = {
+          basic = true, -- Enable basic key mappings (toggle line comments)
+          extra = true, -- Enable extra mappings (e.g., comment block selection)
+        },
+      }
+    end,
+  },
   { -- Useful plugin to show you pending keybinds.
     'folke/which-key.nvim',
     event = 'VimEnter', -- Sets the loading event to 'VimEnter'
@@ -482,23 +500,48 @@ require('lazy').setup({
       local builtin = require 'telescope.builtin'
       vim.keymap.set('n', '<leader>sh', builtin.help_tags, { desc = '[S]earch [H]elp' })
       vim.keymap.set('n', '<leader>sk', builtin.keymaps, { desc = '[S]earch [K]eymaps' })
-      vim.keymap.set('n', '<leader>sf', builtin.find_files, { desc = '[S]earch [F]iles' })
+      vim.keymap.set('n', '<leader>sf', function()
+        -- Get both standard files and .env.local files
+        local command = string.format [[
+    (fd --type f --hidden --exclude .git --exclude node_modules --exclude .next --exclude logs --exclude user_files --exclude models/diagnostic.data; 
+     fd -I --type f --hidden -g "**/.env.local") | sort | uniq
+  ]]
+
+        require('telescope.builtin').find_files {
+          hidden = true,
+          find_command = { 'sh', '-c', command },
+          file_ignore_patterns = {
+            'models/.+/[^%.]+$', -- no extension in subdirs
+            'models/[^%.]+$', -- no extension in root
+            'models/.+/[^%.]+%.[^t][^s].*$', -- not .ts in subdirs
+            'models/[^%.]+%.[^t][^s].*$', -- not .ts in root
+            'models/.+/[^%.]+%..[^s].*$', -- one-char ext not .ts in subdirs
+            'models/[^%.]+%..[^s].*$', -- one-char ext not .ts in root
+            'models/diagnostic%.data/',
+          },
+        }
+      end, { desc = '[S]earch [F]iles' })
       vim.keymap.set('n', '<leader>ss', builtin.builtin, { desc = '[S]earch [S]elect Telescope' })
       vim.keymap.set('n', '<leader>sw', builtin.grep_string, { desc = '[S]earch current [W]ord' })
-      vim.keymap.set('n', '<leader>sg', builtin.live_grep, { desc = '[S]earch by [G]rep' })
+      vim.keymap.set('n', '<leader>sg', function()
+        builtin.live_grep {
+          hidden = true,
+          no_ignore = false, -- Respect .gitignore
+        }
+      end, { desc = '[S]earch by [G]rep' })
       vim.keymap.set('n', '<leader>sd', builtin.diagnostics, { desc = '[S]earch [D]iagnostics' })
       vim.keymap.set('n', '<leader>sr', builtin.resume, { desc = '[S]earch [R]esume' })
       vim.keymap.set('n', '<leader>s.', builtin.oldfiles, { desc = '[S]earch Recent Files ("." for repeat)' })
       vim.keymap.set('n', '<leader><leader>', builtin.buffers, { desc = '[ ] Find existing buffers' })
 
       -- Slightly advanced example of overriding default behavior and theme
-      vim.keymap.set('n', '<leader>/', function()
-        -- You can pass additional configuration to Telescope to change the theme, layout, etc.
-        builtin.current_buffer_fuzzy_find(require('telescope.themes').get_dropdown {
-          winblend = 10,
-          previewer = false,
-        })
-      end, { desc = '[/] Fuzzily search in current buffer' })
+      -- vim.keymap.set("n", "<leader>/", function()
+      -- 	-- You can pass additional configuration to Telescope to change the theme, layout, etc.
+      -- 	builtin.current_buffer_fuzzy_find(require("telescope.themes").get_dropdown({
+      -- 		winblend = 10,
+      -- 		previewer = false,
+      -- 	}))
+      -- end, { desc = "[/] Fuzzily search in current buffer" })
 
       -- It's also possible to pass additional configuration options.
       --  See `:help telescope.builtin.live_grep()` for information about particular keys
@@ -738,6 +781,40 @@ require('lazy').setup({
         -- But for many setups, the LSP (`ts_ls`) will work just fine
         -- ts_ls = {},
         --
+        ts_ls = {
+          on_attach = function(client, bufnr)
+            -- Disable formatting to use Prettier via formatter
+            client.server_capabilities.documentFormattingProvider = false
+          end,
+        },
+
+        -- Python LSP setup with Pyright
+        pyright = {
+          on_attach = function(client, bufnr)
+            -- Disable document formatting (as per your original config)
+            client.server_capabilities.documentFormattingProvider = false
+          end,
+
+          -- Define the root directory for the project
+          root_dir = require('lspconfig.util').root_pattern('pyproject.toml', 'requirements.txt', '.git'),
+
+          -- This is where we configure Pyright to use the .venv
+          on_init = function(client)
+            local root_dir = client.config.root_dir
+            local venv_path = vim.fs.joinpath(root_dir, 'mappy', 'llm-engine', 'src', '.venv')
+            local python_bin = vim.fs.joinpath(venv_path, 'bin', 'python')
+
+            -- Check if the Python binary exists in .venv
+            if vim.fn.filereadable(python_bin) == 1 then
+              client.config.settings = {
+                python = {
+                  venvPath = root_dir, -- Use root directory as the base for the virtual environment path
+                  venv = '.venv', -- Specify the .venv folder
+                },
+              }
+            end
+          end,
+        },
 
         lua_ls = {
           -- cmd = { ... },
@@ -827,17 +904,20 @@ require('lazy').setup({
           lsp_format_opt = 'fallback'
         end
         return {
-          timeout_ms = 500,
+          timeout_ms = 5000,
           lsp_format = lsp_format_opt,
         }
       end,
       formatters_by_ft = {
         lua = { 'stylua' },
         -- Conform can also run multiple formatters sequentially
-        -- python = { "isort", "black" },
+        python = { 'isort', 'black' },
         --
         -- You can use 'stop_after_first' to run the first available formatter from the list
-        -- javascript = { "prettierd", "prettier", stop_after_first = true },
+        javascript = { 'prettierd', 'prettier', stop_after_first = true },
+        javascriptreact = { 'prettierd', 'prettier', stop_after_first = true },
+        typescript = { 'prettierd', 'prettier', stop_after_first = true },
+        typescriptreact = { 'prettierd', 'prettier', stop_after_first = true },
       },
     },
   },
@@ -1055,7 +1135,7 @@ require('lazy').setup({
         --  the list of additional_vim_regex_highlighting and disabled languages for indent.
         additional_vim_regex_highlighting = { 'ruby' },
       },
-      indent = { enable = false, disable = { 'ruby' } },
+      indent = { enable = true, disable = { 'ruby' } },
     },
     -- There are additional nvim-treesitter modules that you can use to interact
     -- with nvim-treesitter. You should go explore a few and see what interests you:
@@ -1078,7 +1158,7 @@ require('lazy').setup({
   require 'kickstart.plugins.indent_line',
   require 'kickstart.plugins.lint',
   require 'kickstart.plugins.autopairs',
-  -- require 'kickstart.plugins.neo-tree',
+  require 'kickstart.plugins.neo-tree',
   -- require 'kickstart.plugins.gitsigns', -- adds gitsigns recommend keymaps
 
   -- NOTE: The import below can automatically add your own plugins, configuration, etc from `lua/custom/plugins/*.lua`
